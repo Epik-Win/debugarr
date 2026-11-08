@@ -956,15 +956,10 @@ class DeBuggarrClient(commands.Bot):
             print(f"DeBuggarr: synced bug {bug['id']} status to Seerr issue {seerr_issue_id} ({status})")
 
     async def _reopen_bug(self, bug: Dict[str, Any], reason: Optional[str] = None, sync_to_seerr: bool = True) -> None:
-        """Shared by the !bug reopen DM command, the API, /reopen-bug, and the
-        Seerr ISSUE_REOPENED auto-handling, so all four stay consistent:
-        clears the fixed-state fields, records why (shown in the embed as
-        "Reopened - Why" when given), reasserts channel order (the bug's
-        message may have been cleaned up while it was fixed/resolved), and
-        syncs the reopen back to Seerr if this bug came from there - skipped
-        when `sync_to_seerr` is False, since the Seerr-webhook path is
-        reacting to Seerr already having done this, and syncing back would
-        just be a redundant, harmless-but-pointless round trip.
+        """Clear fixed-state fields, record the reason, and refresh the bug.
+
+        Sync the reopened status to Seerr unless this call handles a Seerr
+        webhook that already changed the issue there.
         """
         update_bug_fields(
             bug["id"], status="open", fix_description=None, fixed_at=None,
@@ -1275,9 +1270,7 @@ class DeBuggarrClient(commands.Bot):
             "created_at": utcnow_iso(),
         })
 
-        # This bug has no message yet, so _reassert_bug_order will always
-        # (re)post the full open-bug set fresh, contiguous and in order -
-        # that's what actually creates this bug's message in the channel.
+        # Repost open bugs in order and create this bug's channel message.
         await self._reassert_bug_order(channel)
 
         asyncio.create_task(self._collect_slash_diagnostics(bug_id))
@@ -1307,9 +1300,7 @@ class DeBuggarrClient(commands.Bot):
         if seerr_issue_id:
             update_bug_fields(bug_id, seerr_issue_id=seerr_issue_id)
 
-        # This bug has no message yet, so _reassert_bug_order will always
-        # (re)post the full open-bug set fresh, contiguous and in order -
-        # that's what actually creates this bug's message in the channel.
+        # Repost open bugs in order and create this bug's channel message.
         await self._reassert_bug_order(channel)
 
         asyncio.create_task(self._collect_seerr_diagnostics(bug_id, media_title))
