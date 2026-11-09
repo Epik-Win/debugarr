@@ -11,6 +11,9 @@ import re
 import sqlite3
 import sys
 import hashlib
+import urllib.parse
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -35,6 +38,36 @@ def load_env_file(path: Path) -> None:
         key = key.strip()
         value = value.strip().strip('"').strip("'")
         os.environ[key] = value
+
+
+def telegram_api_call(token: str, method: str, payload: Dict[str, Any]) -> Any:
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=urllib.parse.urlencode(payload).encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=35) as response:
+            result = json.loads(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Telegram {method} request failed with HTTP {exc.code}") from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Telegram {method} request failed: {exc.reason}") from None
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram {method} request failed: {result}")
+    return result.get("result")
+
+
+def parse_chat_ids(value: str) -> set[int]:
+    chat_ids = set()
+    for item in value.split(","):
+        item = item.strip()
+        if item:
+            try:
+                chat_ids.add(int(item))
+            except ValueError as exc:
+                raise ValueError(f"Invalid Telegram chat ID: {item}") from exc
+    return chat_ids
 
 
 def utcnow_iso() -> str:
@@ -650,7 +683,11 @@ def build_bug_embed(bug: Dict[str, Any]) -> discord.Embed:
         embed.add_field(name="Reopened — Why", value=bug["reopen_reason"], inline=False)
 
     embed.add_field(name="Reported by", value=bug["reporter_label"], inline=True)
-    embed.add_field(name="Source", value="Seerr issue" if bug["source"] == "seerr" else "Discord report", inline=True)
+    source_label = {
+        "seerr": "Seerr issue",
+        "telegram": "Telegram report",
+    }.get(bug["source"], "Discord report")
+    embed.add_field(name="Source", value=source_label, inline=True)
     embed.add_field(name="Bug ID", value=f"`{bug['id']}`", inline=True)
 
     diagnostics_status = bug.get("diagnostics_status") or "pending"
@@ -731,6 +768,14 @@ class DeBuggarrClient(commands.Bot):
         self._main_channel_ref = os.getenv("DISCORD_MAIN_CHANNEL", "general").strip()
         self._admin_user_id = os.getenv("DISCORD_ADMIN_USER_ID", "").strip()
         self._admin_username = os.getenv("DISCORD_ADMIN_USERNAME", "").strip()
+        self._telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        self._telegram_admin_chat_ids = parse_chat_ids(os.getenv("TELEGRAM_ADMIN_CHAT_IDS", ""))
+        configured_chat_ids = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS")
+        self._telegram_allowed_chat_ids = parse_chat_ids(
+            configured_chat_ids if configured_chat_ids is not None
+            else os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "")
+        )
+        self._telegram_offset = 0
 
         self._local_ai_base = os.getenv("LOCAL_AI_BASE", "http://llama-litellm:4000/v1").strip()
         self._local_ai_model = os.getenv("LOCAL_AI_MODEL", "Apex").strip()
@@ -800,6 +845,7 @@ class DeBuggarrClient(commands.Bot):
 
     async def _dm_admin_all(self, text: str) -> List[discord.Message]:
         """Send a possibly multi-message DM and return every sent message."""
+        await self._telegram_notify_admins(text)
         user = await self._resolve_admin_user()
         if user is None:
             return []
@@ -820,6 +866,240 @@ class DeBuggarrClient(commands.Bot):
                     print(f"Failed to remove partial admin DM after send failure: {cleanup_exc}")
             return []
         return sent_messages
+
+    async def _telegram_send(self, chat_id: int, text: str) -> None:
+        if not self._telegram_token:
+            return
+        for start in range(0, len(text), 4000):
+            await asyncio.to_thread(
+                telegram_api_call,
+                self._telegram_token,
+                "sendMessage",
+                {"chat_id": chat_id, "text": text[start:start + 4000]},
+            )
+
+    async def _telegram_notify_admins(self, text: str) -> None:
+        if not self._telegram_token:
+            return
+        for chat_id in self._telegram_admin_chat_ids:
+            try:
+                await self._telegram_send(chat_id, text)
+            except Exception as exc:
+                print(f"Failed to send Telegram admin notification: {exc}")
+
+    async def _telegram_poll_loop(self) -> None:
+        if not self._telegram_token:
+            return
+        await self.wait_until_ready()
+
+        print("Telegram bot polling enabled")
+        observed_chat_ids = set()
+        while True:
+            try:
+                updates = await asyncio.to_thread(
+                    telegram_api_call,
+                    self._telegram_token,
+                    "getUpdates",
+                    {"offset": self._telegram_offset, "timeout": 25},
+                )
+                for update in updates or []:
+                    self._telegram_offset = max(
+                        self._telegram_offset, int(update.get("update_id", 0)) + 1,
+                    )
+                    message = update.get("message") or update.get("edited_message")
+                    if not message or not message.get("text"):
+                        continue
+                    chat_id = int(message.get("chat", {}).get("id", 0))
+                    if chat_id not in self._telegram_allowed_chat_ids:
+                        if chat_id not in observed_chat_ids:
+                            print(f"Telegram chat ID observed: {chat_id}; authorize it in TELEGRAM_ADMIN_CHAT_IDS or TELEGRAM_ALLOWED_CHAT_IDS")
+                            observed_chat_ids.add(chat_id)
+                        continue
+                    try:
+                        await self._handle_telegram_message(message)
+                    except Exception as exc:
+                        print(f"Telegram command failed: {exc}")
+                        await self._telegram_send(chat_id, "The command failed. Check the Debugarr logs.")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"Telegram polling failed: {exc}")
+                await asyncio.sleep(10)
+
+    async def _handle_telegram_message(self, message: Dict[str, Any]) -> None:
+        chat_id = int(message["chat"]["id"])
+        parts = message["text"].strip().split(maxsplit=1)
+        if not parts:
+            return
+        command = parts[0].split("@", 1)[0].lower()
+        argument = parts[1].strip() if len(parts) > 1 else ""
+
+        if command in ("/start", "/help"):
+            await self._telegram_send(chat_id, (
+                "Debugarr commands:\n"
+                "/report-bug Title | Description\n"
+                "/bugs — list open reports\n"
+                "/resolve-bug ID — admin only\n"
+                "/fixed-bug ID [description] — admin only\n"
+                "/reopen-bug ID Reason — admin only\n"
+                "/bug ACTION REVIEW_ID — decide an integration review (admin only)"
+            ))
+            return
+
+        if command == "/report-bug":
+            if chat_id not in self._telegram_allowed_chat_ids:
+                return
+            if "|" not in argument:
+                await self._telegram_send(chat_id, "Usage: /report-bug Title | Description")
+                return
+            title, description = (part.strip() for part in argument.split("|", 1))
+            if not title or not description or len(title) > 100 or len(description) > 1000:
+                await self._telegram_send(chat_id, "Add a title (up to 100 characters) and description (up to 1000 characters).")
+                return
+            guild_id = int(os.getenv("DISCORD_GUILD_ID", "0") or 0)
+            guild = self.get_guild(guild_id) if guild_id else None
+            channel = self._resolve_main_channel(guild)
+            if channel is None:
+                await self._telegram_send(chat_id, "Debugarr could not find the configured Discord report channel.")
+                return
+            bug_id = new_bug_id()
+            insert_bug({
+                "id": bug_id,
+                "source": "telegram",
+                "reporter_discord_id": f"telegram:{message.get('from', {}).get('id', chat_id)}",
+                "reporter_label": message.get("from", {}).get("username") or f"Telegram user {chat_id}",
+                "title": title,
+                "description": description,
+                "created_at": utcnow_iso(),
+            })
+            await self._reassert_bug_order(channel)
+            asyncio.create_task(self._collect_slash_diagnostics(bug_id))
+            asyncio.create_task(self._notify_admin_new_bug(bug_id, guild_id))
+            asyncio.create_task(self._reconcile_everything())
+            await self._telegram_send(chat_id, f"Report `{bug_id}` was added to the bug board.")
+            return
+
+        if command == "/bugs":
+            bugs = list_open_bugs_ordered()[:10]
+            if not bugs:
+                await self._telegram_send(chat_id, "There are no open bug reports.")
+                return
+            await self._telegram_send(chat_id, "\n".join(
+                f"{bug['id']} — {bug['title']}" for bug in bugs
+            ))
+            return
+
+        if chat_id not in self._telegram_admin_chat_ids:
+            await self._telegram_send(chat_id, "This command is limited to configured Telegram administrators.")
+            return
+
+        if command == "/resolve-bug":
+            bug = get_bug(argument)
+            if not bug:
+                await self._telegram_send(chat_id, f"No bug found with ID `{argument}`.")
+                return
+            update_bug_fields(bug["id"], status="resolved", resolved_at=utcnow_iso())
+            await self._refresh_embed(bug["id"])
+            await self._telegram_send(chat_id, f"Bug `{bug['id']}` marked resolved.")
+            return
+
+        if command == "/fixed-bug":
+            bug_args = argument.split(maxsplit=1)
+            if not bug_args:
+                await self._telegram_send(chat_id, "Usage: /fixed-bug ID [fix description]")
+                return
+            bug = get_bug(bug_args[0])
+            if not bug:
+                await self._telegram_send(chat_id, f"No bug found with ID `{bug_args[0]}`.")
+                return
+            fix_description = bug_args[1].strip() if len(bug_args) > 1 else ""
+            update_bug_fields(
+                bug["id"],
+                status="fixed",
+                fix_description=fix_description or None,
+                fixed_at=utcnow_iso(),
+            )
+            await self._refresh_embed(bug["id"])
+            await self._retire_bug_dm(bug)
+            await self._sync_seerr_status(bug, "resolved")
+            asyncio.create_task(self._reconcile_everything())
+            await self._telegram_send(chat_id, f"Bug `{bug['id']}` marked fixed.")
+            return
+
+        if command == "/reopen-bug":
+            reopen_args = argument.split(maxsplit=1)
+            if len(reopen_args) != 2 or not reopen_args[1].strip():
+                await self._telegram_send(chat_id, "Usage: /reopen-bug ID Reason")
+                return
+            bug = get_bug(reopen_args[0])
+            if not bug:
+                await self._telegram_send(chat_id, f"No bug found with ID `{reopen_args[0]}`.")
+                return
+            await self._reopen_bug(bug, reason=reopen_args[1].strip())
+            await self._telegram_send(chat_id, f"Bug `{bug['id']}` reopened.")
+            return
+
+        if command == "/bug":
+            bug_args = argument.split(maxsplit=2)
+            if len(bug_args) < 2:
+                await self._telegram_send(chat_id, "Usage: /bug ACTION REVIEW_ID")
+                return
+            await self._telegram_decide_review(chat_id, bug_args[0].lower(), bug_args[1].upper())
+            return
+
+        await self._telegram_send(chat_id, "Unknown command. Send /help for available commands.")
+
+    async def _telegram_decide_review(self, chat_id: int, action: str, review_id: str) -> None:
+        conn = get_connection()
+        try:
+            review = conn.execute(
+                "SELECT * FROM integration_reviews WHERE review_id = ?", (review_id,),
+            ).fetchone()
+            if review:
+                if review["status"] != "pending":
+                    await self._telegram_send(chat_id, f"Review `{review_id}` was already {review['status']}.")
+                    return
+                allowed_actions = json.loads(review["actions"])
+                if action not in {item.get("command") for item in allowed_actions}:
+                    choices = ", ".join(item["command"] for item in allowed_actions)
+                    await self._telegram_send(chat_id, f"Choose one of: {choices}")
+                    return
+                cursor = conn.execute(
+                    "UPDATE integration_reviews SET status='decided', decision=?, decided_by=?, "
+                    "decided_at=? WHERE review_id=? AND status='pending'",
+                    (action, f"telegram:{chat_id}", utcnow_iso(), review_id),
+                )
+                conn.commit()
+                if cursor.rowcount:
+                    await self._telegram_send(chat_id, f"Recorded `{action}` for review `{review_id}`.")
+                else:
+                    await self._telegram_send(chat_id, f"Review `{review_id}` was already decided.")
+                return
+            legacy_review = conn.execute(
+                "SELECT * FROM mediacheck_reviews WHERE review_id = ?", (review_id,),
+            ).fetchone()
+            if legacy_review:
+                if legacy_review["status"] != "pending":
+                    await self._telegram_send(chat_id, f"Review `{review_id}` was already {legacy_review['status']}.")
+                    return
+                if action not in ("replace", "accept", "confirm", "deny"):
+                    await self._telegram_send(chat_id, "Choose `replace` or `accept` for this review.")
+                    return
+                decision = "confirmed" if action in ("replace", "confirm") else "denied"
+                cursor = conn.execute(
+                    "UPDATE mediacheck_reviews SET status=?, decision=?, decided_by=?, "
+                    "decided_at=? WHERE review_id=? AND status='pending'",
+                    (decision, decision, f"telegram:{chat_id}", utcnow_iso(), review_id),
+                )
+                conn.commit()
+                if cursor.rowcount:
+                    await self._telegram_send(chat_id, f"Recorded `{action}` for review `{review_id}`.")
+                else:
+                    await self._telegram_send(chat_id, f"Review `{review_id}` was already decided.")
+                return
+        finally:
+            conn.close()
+        await self._telegram_send(chat_id, f"No pending integration review found with ID `{review_id}`.")
 
     async def _delete_admin_dm_messages(self, stored_ids: Optional[str]) -> bool:
         if not stored_ids:
@@ -2429,6 +2709,8 @@ class DeBuggarrClient(commands.Bot):
         asyncio.create_task(self._bottom_check_loop())
         asyncio.create_task(self._fixed_bug_cleanup_loop())
         asyncio.create_task(self._reassert_bug_order())
+        if self._telegram_token:
+            asyncio.create_task(self._telegram_poll_loop())
 
 
 async def run_bot() -> None:
