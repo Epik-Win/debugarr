@@ -1,0 +1,1208 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Debugarr API",
+    "version": "1.0.0",
+    "description": "Authenticated HTTP API for bug reports, integration notifications, and review workflows. The Seerr webhook is separately configurable and is documented alongside the REST API."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The Debugarr host and configured HTTP API port"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Bugs",
+      "description": "Read and manage bug reports and their diagnostic bundles."
+    },
+    {
+      "name": "Notifications",
+      "description": "Send administrator notifications and resolve them when no longer actionable."
+    },
+    {
+      "name": "Integration reviews",
+      "description": "Create reviews that require an administrator decision and collect decisions."
+    },
+    {
+      "name": "Mediacheck reviews",
+      "description": "Mediacheck-specific review workflow."
+    },
+    {
+      "name": "Webhooks",
+      "description": "Incoming Seerr issue notifications."
+    },
+    {
+      "name": "Documentation",
+      "description": "Interactive API documentation."
+    }
+  ],
+  "security": [
+    {
+      "ApiSecret": []
+    },
+    {
+      "ApiSecretHeader": []
+    }
+  ],
+  "paths": {
+    "/api/docs": {
+      "get": {
+        "tags": [
+          "Documentation"
+        ],
+        "summary": "Open the interactive Swagger UI",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Swagger UI HTML"
+          }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "tags": [
+          "Documentation"
+        ],
+        "summary": "Download the OpenAPI definition",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OpenAPI document"
+          }
+        }
+      }
+    },
+    "/api/bugs": {
+      "get": {
+        "tags": [
+          "Bugs"
+        ],
+        "summary": "List bug reports",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional exact status filter."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bug report list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "bugs"
+                  ],
+                  "properties": {
+                    "bugs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Bug"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/ApiSecretMissing"
+          }
+        }
+      }
+    },
+    "/api/bugs/{bug_id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BugId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Bugs"
+        ],
+        "summary": "Get a bug report",
+        "responses": {
+          "200": {
+            "description": "Bug report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Bug"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Bugs"
+        ],
+        "summary": "Remove a bug report",
+        "description": "Deletes the bug record and its Discord/administrator messages when possible.",
+        "responses": {
+          "200": {
+            "description": "Bug removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "removed"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/bugs/{bug_id}/bundle": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BugId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Bugs"
+        ],
+        "summary": "List diagnostic bundle files",
+        "responses": {
+          "200": {
+            "description": "Bundle files; an empty bundle is returned when no directory exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/bugs/{bug_id}/bundle/{filename}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BugId"
+        },
+        {
+          "name": "filename",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "A filename returned by the bundle-list endpoint."
+        }
+      ],
+      "get": {
+        "tags": [
+          "Bugs"
+        ],
+        "summary": "Read a diagnostic bundle file",
+        "responses": {
+          "200": {
+            "description": "Plain-text file contents",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/bugs/{bug_id}/fixed": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BugId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Bugs"
+        ],
+        "summary": "Mark a bug fixed",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "description": "Optional fix description."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated bug report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Bug"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/bugs/{bug_id}/reopen": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BugId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Bugs"
+        ],
+        "summary": "Reopen a bug",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "Optional reason shown with the reopened report."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated bug report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Bug"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/bugs/{bug_id}/edit": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BugId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Bugs"
+        ],
+        "summary": "Edit a bug description",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "description"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated bug report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Bug"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/notify": {
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Send a private administrator notification",
+        "description": "Notifications with the same active source and notification_id are idempotent. Include both fields if the caller will later resolve the notification.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationRequest"
+              },
+              "example": {
+                "source": "mediacheck",
+                "notification_id": "job-123",
+                "message": "A media check needs attention."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Notification sent or already active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "sent"
+                    },
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "notification_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamFailure"
+          }
+        }
+      }
+    },
+    "/api/notify/{source}/{notification_id}/resolve": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Source"
+        },
+        {
+          "$ref": "#/components/parameters/NotificationId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Resolve and remove a private notification",
+        "responses": {
+          "200": {
+            "description": "Notification resolved; notification_found is false when it was not tracked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "resolved"
+                    },
+                    "notification_found": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamFailure"
+          }
+        }
+      }
+    },
+    "/api/reviews": {
+      "get": {
+        "tags": [
+          "Integration reviews"
+        ],
+        "summary": "List administrator decisions for an integration",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReviewSource"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "decided",
+                "completed"
+              ],
+              "default": "decided"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching reviews",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reviews": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/IntegrationReview"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Integration reviews"
+        ],
+        "summary": "Create an administrator decision request",
+        "description": "Review IDs are idempotent for the same source. A conflicting source returns 409. Actions become the administrator's available commands.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Review created or its current state returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "review_id": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamFailure"
+          }
+        }
+      }
+    },
+    "/api/reviews/{review_id}/complete": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ReviewId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Integration reviews"
+        ],
+        "summary": "Complete a decided integration review",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Result"
+        },
+        "responses": {
+          "200": {
+            "description": "Review completed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamFailure"
+          }
+        }
+      }
+    },
+    "/api/reviews/{review_id}/withdraw": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ReviewId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Integration reviews"
+        ],
+        "summary": "Withdraw an unanswered integration review",
+        "description": "Use this when the review should be removed before the administrator decides. A decided review returns 409.",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Result"
+        },
+        "responses": {
+          "200": {
+            "description": "Review withdrawn or already completed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamFailure"
+          }
+        }
+      }
+    },
+    "/api/mediacheck/reviews": {
+      "get": {
+        "tags": [
+          "Mediacheck reviews"
+        ],
+        "summary": "List completed Mediacheck decisions",
+        "responses": {
+          "200": {
+            "description": "Confirmed or denied Mediacheck reviews",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reviews": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MediacheckReview"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Mediacheck reviews"
+        ],
+        "summary": "Ask the administrator whether a media file should be replaced",
+        "description": "The review_id must use the MC- followed by eight hexadecimal digits format. Repeating an existing pending review is idempotent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediacheckReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Review created or already pending"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamFailure"
+          }
+        }
+      }
+    },
+    "/api/mediacheck/reviews/{review_id}/complete": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ReviewId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Mediacheck reviews"
+        ],
+        "summary": "Complete a decided Mediacheck review",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Result"
+        },
+        "responses": {
+          "200": {
+            "description": "Review completed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamFailure"
+          }
+        }
+      }
+    },
+    "/debuggarr/seerr-webhook": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Receive a Seerr issue report",
+        "description": "The default path is /debuggarr/seerr-webhook; set SEERR_WEBHOOK_PATH to change it. If SEERR_WEBHOOK_SECRET is configured, send the raw secret in Authorization or X-Webhook-Secret.",
+        "security": [
+          {},
+          {
+            "WebhookSecret": []
+          },
+          {
+            "WebhookSecretHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Seerr issue webhook payload. Debugarr accepts the supported fields and derives the media title and reporter from the event.",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook accepted or ignored"
+          },
+          "202": {
+            "description": "Webhook accepted but no Discord server could be resolved"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "Send the raw API_SECRET value; do not prefix it with Bearer."
+      },
+      "ApiSecretHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Alternative header for the raw API_SECRET value."
+      },
+      "WebhookSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "Optional raw SEERR_WEBHOOK_SECRET value."
+      },
+      "WebhookSecretHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Webhook-Secret",
+        "description": "Alternative header for the raw SEERR_WEBHOOK_SECRET value."
+      }
+    },
+    "parameters": {
+      "BugId": {
+        "name": "bug_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Source": {
+        "name": "source",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "NotificationId": {
+        "name": "notification_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ReviewId": {
+        "name": "review_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ReviewSource": {
+        "name": "source",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{1,39}$"
+        }
+      }
+    },
+    "requestBodies": {
+      "Result": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "result"
+              ],
+              "properties": {
+                "result": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1500
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Bug": {
+        "type": "object",
+        "description": "Bug report with upvote/downvote IDs expanded as arrays.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "reporter_discord_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "reporter_label": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolved_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "upvotes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "downvotes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "NotificationRequest": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "description": "Integration name; defaults to local-ai."
+          },
+          "notification_id": {
+            "type": "string",
+            "description": "Stable caller-provided ID. Requires source and makes active sends idempotent."
+          },
+          "transient": {
+            "type": "boolean",
+            "default": false,
+            "description": "Automatically expire the DM reminder after one day."
+          }
+        }
+      },
+      "IntegrationReviewRequest": {
+        "type": "object",
+        "required": [
+          "source",
+          "review_id",
+          "title",
+          "summary",
+          "details",
+          "actions"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{1,39}$"
+          },
+          "review_id": {
+            "type": "string",
+            "pattern": "^[A-Z0-9][A-Z0-9_-]{2,63}$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "details": {
+            "type": "object",
+            "description": "JSON object with a serialized size no greater than 100 KB."
+          },
+          "actions": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 5,
+            "items": {
+              "type": "object",
+              "required": [
+                "command",
+                "description"
+              ],
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,23}$",
+                  "description": "Unique lowercase command; help is reserved."
+                },
+                "description": {
+                  "type": "string",
+                  "maxLength": 300
+                }
+              }
+            }
+          }
+        }
+      },
+      "IntegrationReview": {
+        "type": "object",
+        "properties": {
+          "review_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "nullable": true
+          },
+          "decided_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "decided_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "result": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "MediacheckReviewRequest": {
+        "type": "object",
+        "required": [
+          "review_id",
+          "media_path",
+          "title",
+          "evidence"
+        ],
+        "properties": {
+          "review_id": {
+            "type": "string",
+            "pattern": "^MC-[A-F0-9]{8}$"
+          },
+          "media_path": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "evidence": {
+            "type": "object"
+          }
+        }
+      },
+      "MediacheckReview": {
+        "type": "object",
+        "properties": {
+          "review_id": {
+            "type": "string"
+          },
+          "media_path": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "nullable": true
+          },
+          "decided_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "decided_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "result": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Missing or incorrect API/webhook secret",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ApiSecretMissing": {
+        "description": "API_SECRET is not configured on the server",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The requested resource was not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The resource state does not allow this operation",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "UpstreamFailure": {
+        "description": "Debugarr could not send or delete a Discord DM",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

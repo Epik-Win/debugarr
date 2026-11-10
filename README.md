@@ -99,6 +99,13 @@ API or webhook outside a trusted network without appropriate network controls.
 Keep tokens, API keys, webhook secrets, and collected diagnostics out of
 version control.
 
+## HTTP API
+
+Open the interactive Swagger UI at `/api/docs`; the OpenAPI 3 document is
+available at `/api/openapi.json`. The complete GitHub-readable reference,
+including authentication and request examples, is in [docs/API.md](docs/API.md).
+Run the documentation helper tests with `python -m unittest discover -s tests`.
+
 ## Docker image
 
 Each push to `main` publishes a multi-architecture image to GitHub Container

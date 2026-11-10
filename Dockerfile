@@ -6,6 +6,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir discord.py plexapi aiohttp docker requests
 
 COPY debuggarr.py /app/debuggarr.py
+COPY api_docs.py openapi.json /app/
 
 ENTRYPOINT ["python", "-u", "/app/debuggarr.py"]
 CMD ["--env-file", "/run/secrets/debuggarr.env"]

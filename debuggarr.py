@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import discord
 from discord.ext import commands
+from api_docs import load_openapi_document, swagger_ui_html
 
 DEFAULT_ENV_FILE = Path("/opt/debuggarr/.env")
 DEFAULT_DATA_DIR = Path(os.environ.get("DATA_DIR", "/opt/debuggarr/data"))
@@ -2047,6 +2048,8 @@ class DeBuggarrClient(commands.Bot):
         @web.middleware
         async def api_auth_middleware(request: "web.Request", handler):
             if request.path.startswith("/api/"):
+                if request.path in ("/api/docs", "/api/openapi.json"):
+                    return await handler(request)
                 if not self._api_secret:
                     return web.json_response({"error": "API_SECRET is not configured on the server"}, status=503)
                 auth = request.headers.get("Authorization") or request.headers.get("X-API-Key")
@@ -2065,6 +2068,17 @@ class DeBuggarrClient(commands.Bot):
             finally:
                 conn.close()
             return web.json_response({"bugs": [bug_to_api_dict(dict(row)) for row in rows]})
+
+        async def api_docs(request: "web.Request") -> "web.Response":
+            return web.Response(text=swagger_ui_html(), content_type="text/html")
+
+        async def api_openapi(request: "web.Request") -> "web.Response":
+            try:
+                document = load_openapi_document(self._seerr_webhook_path)
+            except (OSError, ValueError, KeyError) as exc:
+                print(f"Could not load the OpenAPI document: {exc}")
+                return web.json_response({"error": "openapi_document_unavailable"}, status=500)
+            return web.json_response(document)
 
         async def api_get_bug(request: "web.Request") -> "web.Response":
             bug = get_bug(request.match_info["bug_id"])
@@ -2599,6 +2613,8 @@ class DeBuggarrClient(commands.Bot):
 
         app = web.Application(middlewares=[api_auth_middleware])
         app.router.add_post(self._seerr_webhook_path, seerr_handle)
+        app.router.add_get("/api/docs", api_docs)
+        app.router.add_get("/api/openapi.json", api_openapi)
         app.router.add_get("/api/bugs", api_list_bugs)
         app.router.add_get("/api/bugs/{bug_id}", api_get_bug)
         app.router.add_get("/api/bugs/{bug_id}/bundle", api_list_bundle)
